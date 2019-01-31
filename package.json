@@ -1,6 +1,6 @@
 {
    "name": "@scrypted/chromecast",
-   "version": "0.0.1",
+   "version": "0.0.2",
    "description": "Send video, audio, and text to speech notifications to Chromecast and Google Home devices",
    "author": "Scrypted",
    "license": "Apache",
@@ -20,13 +20,11 @@
       "plugin"
    ],
    "scrypted": {
-      "name": "Scrypted Visual Studio Code Sample Library",
-      "type": "Library"
-   },
-   "scrypted": {
       "name": "Chromecast Notifier",
       "type": "Device",
-      "interfaces": ["DeviceProvider"]
+      "interfaces": [
+         "DeviceProvider"
+      ]
    },
    "devDependencies": {
       "raw-loader": "^1.0.0",

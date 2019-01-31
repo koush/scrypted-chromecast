@@ -61,7 +61,7 @@ const audioFetch = (body) => mediaConverter.convert(body).to('android.net.Uri', 
 const memoizeAudioFetch = memoizeOne(audioFetch);
 
 CastDevice.prototype.sendNotificationToHost = function (title, body, media, mimeType) {
-  if (!media && this.device.type == 'Speaker') {
+  if (!media || this.device.type == 'Speaker') {
 
     // the mediaConvert variable is provided by Scrypted and can be used to convert
     // MediaObjects into other objects.
