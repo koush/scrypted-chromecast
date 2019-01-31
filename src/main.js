@@ -83,8 +83,9 @@ CastDevice.prototype.sendNotificationToHost = function (title, body, media, mime
 
 CastDevice.prototype.sendNotification = function (title, body, media, mimeType) {
   if (!this.device) {
-    this.provider.search.removeAllEmitters(this.id);
+    this.provider.search.removeAllListeners(this.id);
     this.provider.search.once(this.id, () => this.sendNotificationToHost(title, body, media, mimeType));
+    this.provider.discoverDevices(30000);
     return;
   }
 
@@ -98,10 +99,15 @@ function DeviceProvider() {
 }
 
 DeviceProvider.prototype.getDevice = function (id) {
-  return this.devices[id] || (this.devices[id] = new CastDevice(id));
+  return this.devices[id] || (this.devices[id] = new CastDevice(this, id));
 }
 
 DeviceProvider.prototype.discoverDevices = function (duration) {
+  if (this.searching) {
+    return;
+  }
+  this.searching = true;
+
   this.browser = mdns.createBrowser(mdns.tcp('googlecast'));
 
   this.browser.on('serviceUp', (service) => {
@@ -138,6 +144,10 @@ DeviceProvider.prototype.discoverDevices = function (duration) {
   });
 
   this.browser.start();
+
+  setTimeout(() => {
+    this.searching = false;
+  }, duration)
 }
 
 
