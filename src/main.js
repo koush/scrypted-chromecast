@@ -1,6 +1,5 @@
 const fs = require('fs');
 import path from 'path';
-
 fs.registerFile(path.resolve('../node_modules/castv2/lib/cast_channel.proto'), require('raw-loader!../node_modules/castv2/lib/cast_channel.proto'))
 
 var Client                = require('castv2-client').Client;
