@@ -95,19 +95,6 @@ CastDevice.prototype.sendNotification = function (title, body, media, mimeType) 
 function DeviceProvider() {
   this.devices = {};
   this.search = new EventEmitter();
-  this.discoverDevices(30000);
-}
-
-DeviceProvider.prototype.getDevice = function (id) {
-  return this.devices[id] || (this.devices[id] = new CastDevice(this, id));
-}
-
-DeviceProvider.prototype.discoverDevices = function (duration) {
-  if (this.searching) {
-    return;
-  }
-  this.searching = true;
-
   this.browser = mdns.createBrowser(mdns.tcp('googlecast'));
 
   this.browser.on('serviceUp', (service) => {
@@ -143,11 +130,25 @@ DeviceProvider.prototype.discoverDevices = function (duration) {
     deviceManager.onDeviceDiscovered(device);
   });
 
-  this.browser.start();
+  this.discoverDevices(30000);
+}
 
+DeviceProvider.prototype.getDevice = function (id) {
+  return this.devices[id] || (this.devices[id] = new CastDevice(this, id));
+}
+
+DeviceProvider.prototype.discoverDevices = function (duration) {
+  if (this.searching) {
+    return;
+  }
+  this.searching = true;
+  duration = duration || 10000;
   setTimeout(() => {
     this.searching = false;
+    this.browser.stop();
   }, duration)
+
+  this.browser.start();
 }
 
 
