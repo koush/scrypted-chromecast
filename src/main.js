@@ -1,5 +1,7 @@
-var poop = require('safe-buffer').Buffer;
-console.log(poop);
+const fs = require('fs');
+import path from 'path';
+
+fs.registerFile(path.resolve('../node_modules/castv2/lib/cast_channel.proto'), require('raw-loader!../node_modules/castv2/lib/cast_channel.proto'))
 
 var Client                = require('castv2-client').Client;
 var DefaultMediaReceiver  = require('castv2-client').DefaultMediaReceiver;
@@ -9,7 +11,7 @@ var browser = mdns.createBrowser(mdns.tcp('googlecast'));
 
 browser.on('serviceUp', function(service) {
   console.log('found device "%s" at %s:%d', service.name, service.addresses[0], service.port);
-  ondeviceup(service.addresses[0]);
+  // ondeviceup(service.addresses[0]);
   // browser.stop();
 });
 

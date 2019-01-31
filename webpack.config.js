@@ -16,10 +16,9 @@ const webpackConfig = {
         },
     },
     node: {
-        Buffer: false,
+        __dirname: true,
     },
-    externals: {
-    }
 }
 
 module.exports = merge(defaultWebpackConfig, webpackConfig);
+console.log(module.exports);

@@ -17,6 +17,7 @@
       "type": "Library"
    },
    "devDependencies": {
+      "raw-loader": "^1.0.0",
       "scrypted-deploy": "^1.2.7",
       "webpack-merge": "^4.2.1"
    },
