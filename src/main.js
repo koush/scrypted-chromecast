@@ -1,5 +1,5 @@
-const stream = require('stream');
-
+var poop = require('safe-buffer').Buffer;
+console.log(poop);
 
 var Client                = require('castv2-client').Client;
 var DefaultMediaReceiver  = require('castv2-client').DefaultMediaReceiver;
@@ -10,7 +10,7 @@ var browser = mdns.createBrowser(mdns.tcp('googlecast'));
 browser.on('serviceUp', function(service) {
   console.log('found device "%s" at %s:%d', service.name, service.addresses[0], service.port);
   ondeviceup(service.addresses[0]);
-  browser.stop();
+  // browser.stop();
 });
 
 browser.start();
