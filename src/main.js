@@ -5,7 +5,7 @@ fs.registerFile(resolve('../node_modules/castv2/lib/cast_channel.proto'), requir
 const mdns = require('mdns');
 import EventEmitter from 'events';
 const Client = require('castv2-client').Client;
-const DefaultMediaReceiver  = require('castv2-client').DefaultMediaReceiver;
+const DefaultMediaReceiver = require('castv2-client').DefaultMediaReceiver;
 import memoizeOne from 'memoize-one';
 
 function CastDevice(provider, id) {
@@ -13,45 +13,52 @@ function CastDevice(provider, id) {
   this.id = id;
 }
 
-CastDevice.prototype.sendMedia = function (title, mediaUrl, mimeType) {
-  var client = new Client();
+CastDevice.prototype.sendMediaToClient = function (title, mediaUrl, mimeType) {
+  this.client.launch(DefaultMediaReceiver, function (err, player) {
+    var media = {
 
-  client.connect(this.host, function () {
-    console.log('connected, launching app ...');
+      // Here you can plug an URL to any mp4, webm, mp3 or jpg file with the proper contentType.
+      contentId: mediaUrl,
+      contentType: mimeType,
+      streamType: 'BUFFERED', // or LIVE
 
-    client.launch(DefaultMediaReceiver, function (err, player) {
-      var media = {
+      // Title and cover displayed while buffering
+      metadata: {
+        type: 0,
+        metadataType: 0,
+        title: title,
+      }
+    };
 
-        // Here you can plug an URL to any mp4, webm, mp3 or jpg file with the proper contentType.
-        contentId: mediaUrl,
-        contentType: mimeType,
-        streamType: 'BUFFERED', // or LIVE
-
-        // Title and cover displayed while buffering
-        metadata: {
-          type: 0,
-          metadataType: 0,
-          title: title,
-        }
-      };
-
-      player.on('status', function (status) {
-        console.log('status broadcast playerState=%s', status.playerState);
-      });
-
-      console.log('app "%s" launched, loading media %s ...', player.session.displayName, media.contentId);
-
-      player.load(media, { autoplay: true }, function (err, status) {
-        console.log('media loaded playerState=%s', status.playerState);
-      });
-
+    player.on('status', function (status) {
+      console.log('status broadcast playerState=%s', status.playerState);
     });
 
+    console.log('app "%s" launched, loading media %s ...', player.session.displayName, media.contentId);
+
+    player.load(media, { autoplay: true }, function (err, status) {
+      console.log('media loaded playerState=%s', status.playerState);
+    });
+  });
+}
+
+CastDevice.prototype.sendMedia = function (title, mediaUrl, mimeType) {
+  if (this.client) {
+    console.log('reusing client')
+    this.sendMediaToClient(title, mediaUrl, mimeType);
+    return;
+  }
+
+  this.client = new Client();
+
+  this.client.connect(this.host, () => {
+    this.sendMediaToClient(title, mediaUrl, mimeType);
   });
 
-  client.on('error', function (err) {
+  this.client.on('error', (err) => {
     console.log('Error: %s', err.message);
-    client.close();
+    this.client.close();
+    delete this.client;
   });
 }
 
@@ -75,10 +82,10 @@ CastDevice.prototype.sendNotificationToHost = function (title, body, media, mime
   }
 
   mediaConverter.convert(media, mimeType)
-  .to('android.net.Uri', mimeType)
-  .setCallback((e, result) => {
-    this.sendMedia(title, result.toString(), mimeType);
-  });
+    .to('android.net.Uri', mimeType)
+    .setCallback((e, result) => {
+      this.sendMedia(title, result.toString(), mimeType);
+    });
 }
 
 CastDevice.prototype.sendNotification = function (title, body, media, mimeType) {
