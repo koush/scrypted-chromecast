@@ -3,9 +3,9 @@
    "version": "0.0.5",
    "description": "Send video, audio, and text to speech notifications to Chromecast and Google Home devices",
    "author": "Scrypted",
-   "license": "Apache",
+   "license": "Apache-2.0",
    "scripts": {
-      "prepublish": "NODE_ENV=production scrypted-webpack",
+      "prepublishOnly": "NODE_ENV=production scrypted-webpack",
       "prescrypted-vscode-launch": "scrypted-webpack",
       "scrypted-vscode-launch": "scrypted-deploy-debug",
       "scrypted-deploy-debug": "scrypted-deploy-debug",
