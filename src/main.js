@@ -14,29 +14,39 @@ function CastDevice(provider, id) {
 }
 
 CastDevice.prototype.sendMediaToClient = function (title, mediaUrl, mimeType) {
-  this.client.launch(DefaultMediaReceiver, function (err, player) {
-    var media = {
+  var media = {
 
-      // Here you can plug an URL to any mp4, webm, mp3 or jpg file with the proper contentType.
-      contentId: mediaUrl,
-      contentType: mimeType,
-      streamType: 'BUFFERED', // or LIVE
+    // Here you can plug an URL to any mp4, webm, mp3 or jpg file with the proper contentType.
+    contentId: mediaUrl,
+    contentType: mimeType,
+    streamType: 'BUFFERED', // or LIVE
 
-      // Title and cover displayed while buffering
-      metadata: {
-        type: 0,
-        metadataType: 0,
-        title: title,
-      }
-    };
+    // Title and cover displayed while buffering
+    metadata: {
+      type: 0,
+      metadataType: 0,
+      title: title,
+    }
+  };
 
-    player.on('status', function (status) {
+  if (this.player) {
+    this.player.load(media, { autoplay: true }, function (err, status) {
+      console.log('media loaded playerState=%s', status.playerState);
+    });
+    return;
+  }
+
+  this.client.launch(DefaultMediaReceiver, (err, player) => {
+    this.player = player;
+    this.player.on('status', function (status) {
       console.log('status broadcast playerState=%s', status.playerState);
+    });
+    this.player.on('close', () => {
+      delete this.player;
     });
 
     console.log('app "%s" launched, loading media %s ...', player.session.displayName, media.contentId);
-
-    player.load(media, { autoplay: true }, function (err, status) {
+    this.player.load(media, { autoplay: true }, function (err, status) {
       console.log('media loaded playerState=%s', status.playerState);
     });
   });
