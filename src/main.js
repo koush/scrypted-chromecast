@@ -114,7 +114,7 @@ function DeviceProvider() {
   this.search = new EventEmitter();
   this.browser = mdns.createBrowser(mdns.tcp('googlecast'));
 
-  this.browser.on('serviceUp', (service) => {
+  this.browser.on('serviceUp', function(service) {
     console.log(JSON.stringify(service));
     var id = service.txtRecord.id;
     if (!id) {
@@ -145,7 +145,7 @@ function DeviceProvider() {
 
     this.search.emit(id);
     deviceManager.onDeviceDiscovered(device);
-  });
+  }.bind(this));
 
   this.discoverDevices(30000);
 }
