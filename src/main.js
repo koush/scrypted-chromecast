@@ -31,7 +31,7 @@ CastDevice.prototype.sendMediaToClient = function (title, mediaUrl, mimeType) {
 
   if (this.player) {
     this.player.load(media, { autoplay: true }, function (err, status) {
-      console.log('media loaded playerState=%s', status.playerState);
+      log.i(`media loaded playerState=${status.playerState}`);
     });
     return;
   }
@@ -39,22 +39,32 @@ CastDevice.prototype.sendMediaToClient = function (title, mediaUrl, mimeType) {
   this.client.launch(DefaultMediaReceiver, (err, player) => {
     this.player = player;
     this.player.on('status', function (status) {
-      console.log('status broadcast playerState=%s', status.playerState);
+      log.i(`status broadcast playerState=${status.playerState}`);
     });
     this.player.on('close', () => {
+      log.i('player closed');
       delete this.player;
+      if (this.client) {
+        this.client.close();
+        delete this.client;
+      }
     });
 
-    console.log('app "%s" launched, loading media %s ...', player.session.displayName, media.contentId);
+    log.i(`app "${player.session.displayName}" launched, loading media ${media.contentId} ...`);
     this.player.load(media, { autoplay: true }, function (err, status) {
-      console.log('media loaded playerState=%s', status.playerState);
+      if (status) {
+        log.i(`media loaded playerState=${status.playerState}`);
+      }
+      else if (err) {
+        log.e(`media load failed ${err}`);
+      }
     });
   });
 }
 
 CastDevice.prototype.sendMedia = function (title, mediaUrl, mimeType) {
   if (this.client) {
-    console.log('reusing client')
+    log.i('reusing client')
     this.sendMediaToClient(title, mediaUrl, mimeType);
     return;
   }
@@ -66,9 +76,12 @@ CastDevice.prototype.sendMedia = function (title, mediaUrl, mimeType) {
   });
 
   this.client.on('error', (err) => {
-    console.log('Error: %s', err.message);
-    this.client.close();
-    delete this.client;
+    log.i(`Error: ${err.message}`);
+    delete this.player;
+    if (this.client) {
+      this.client.close();
+      delete this.client;
+    }
   });
 }
 
@@ -115,7 +128,7 @@ function DeviceProvider() {
   this.browser = mdns.createBrowser(mdns.tcp('googlecast'));
 
   this.browser.on('serviceUp', function(service) {
-    console.log(JSON.stringify(service));
+    log.i(JSON.stringify(service));
     var id = service.txtRecord.id;
     if (!id) {
       // wtf?
