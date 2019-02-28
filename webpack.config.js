@@ -1,4 +1,4 @@
-const defaultWebpackConfig = require('scrypted-deploy').getDefaultWebpackConfig();
+const defaultWebpackConfig = require('@scrypted/sdk').getDefaultWebpackConfig();
 const merge = require('webpack-merge');
 
 const webpackConfig = {
