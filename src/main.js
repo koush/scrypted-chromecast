@@ -21,7 +21,7 @@ function CastDevice(provider, id) {
   this.id = id;
 }
 
-CastDevice.prototype.sendMediaToClient = function (title, mediaUrl, mimeType) {
+CastDevice.prototype.sendMediaToClient = function (title, mediaUrl, mimeType, opts) {
   var media = {
     // Here you can plug an URL to any mp4, webm, mp3 or jpg file with the proper contentType.
     contentId: mediaUrl,
@@ -51,19 +51,23 @@ CastDevice.prototype.sendMediaToClient = function (title, mediaUrl, mimeType) {
   }
   appId = app.APP_ID;
   
-  var opts = {
+  opts = opts || {
     autoplay: true,
   }
 
+  var load = () => {
+    this.player.load(media, opts, function (err, status) {
+      if (err) {
+        log.e(`load error: ${err}`);
+        return;
+      }
+      log.i(`media loaded playerState=${status.playerState}`);
+    });
+  };
+
   if (this.player) {
     if (this.player.appId == appId) {
-      this.player.load(media, opts, function (err, status) {
-        if (err) {
-          log.e(`load error: ${err}`);
-          return;
-        }
-        log.i(`media loaded playerState=${status.playerState}`);
-      });
+      load();
       return;
     }
     this.player.close();
@@ -90,14 +94,32 @@ CastDevice.prototype.sendMediaToClient = function (title, mediaUrl, mimeType) {
     });
 
     log.i(`app "${player.session.displayName}" launched, loading media ${media.contentId} ...`);
-    this.player.load(media, opts, function (err, status) {
-      if (err) {
-        log.e(`load error: ${err}`);
-        return;
-      }
-      log.i(`media loaded playerState=${status.playerState}`);
-    });
+    load();
   });
+}
+
+CastDevice.prototype.load = function(media, options) {
+  const mimeType = options && options.mimeType;
+  mediaConverter.convert(media, mimeType)
+  .to('android.net.Uri')
+  .setCallback((e, result) => {
+    this.sendMedia(options && options.title, result.toString(), mimeType, options);
+  });
+}
+
+CastDevice.prototype.play = function() {
+  if (this.player)
+    this.player.play();
+}
+
+CastDevice.prototype.pause = function() {
+  if (this.player)
+    this.player.pause();
+}
+
+CastDevice.prototype.stop = function() {
+  if (this.player)
+    this.player.stop();
 }
 
 CastDevice.prototype.sendMedia = function (title, mediaUrl, mimeType) {
@@ -176,7 +198,7 @@ function DeviceProvider() {
     var name = service.txtRecord.fn;
     var type = (model && model.indexOf('Google Home') != -1 && model.indexOf('Hub') == -1) ? 'Speaker' : 'Display';
 
-    var interfaces = ['Notifier'];
+    var interfaces = ['Notifier', 'MediaPlayer'];
 
     var device = {
       id,
