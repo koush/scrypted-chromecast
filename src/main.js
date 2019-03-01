@@ -1,4 +1,5 @@
 const fs = require('fs');
+const util = require('util');
 import { resolve } from 'path';
 fs.registerFile(resolve('../node_modules/castv2/lib/cast_channel.proto'), require('raw-loader!../node_modules/castv2/lib/cast_channel.proto'))
 
@@ -8,6 +9,13 @@ const Client = require('castv2-client').Client;
 const DefaultMediaReceiver = require('castv2-client').DefaultMediaReceiver;
 import memoizeOne from 'memoize-one';
 
+function ScryptedMediaReceiver() {
+  DefaultMediaReceiver.apply(this, arguments);
+}
+ScryptedMediaReceiver.APP_ID = '9E3714BD';
+util.inherits(ScryptedMediaReceiver, DefaultMediaReceiver);
+
+
 function CastDevice(provider, id) {
   this.provider = provider;
   this.id = id;
@@ -15,7 +23,6 @@ function CastDevice(provider, id) {
 
 CastDevice.prototype.sendMediaToClient = function (title, mediaUrl, mimeType) {
   var media = {
-
     // Here you can plug an URL to any mp4, webm, mp3 or jpg file with the proper contentType.
     contentId: mediaUrl,
     contentType: mimeType,
@@ -26,19 +33,51 @@ CastDevice.prototype.sendMediaToClient = function (title, mediaUrl, mimeType) {
       type: 0,
       metadataType: 0,
       title: title,
+    },
+
+    customData: {
+      senderId: pushManager.getSenderId(),
+      registrationId: pushManager.getRegistrationId(),
     }
   };
 
-  if (this.player) {
-    this.player.load(media, { autoplay: true }, function (err, status) {
-      log.i(`media loaded playerState=${status.playerState}`);
-    });
-    return;
+  var app;
+  var appId;
+  if (!mediaUrl.startsWith('http')) {
+    app = ScryptedMediaReceiver;
+  }
+  else {
+    app = DefaultMediaReceiver;
+  }
+  appId = app.APP_ID;
+  
+  var opts = {
+    autoplay: true,
   }
 
-  this.client.launch(DefaultMediaReceiver, (err, player) => {
+  if (this.player) {
+    if (this.player.appId == appId) {
+      this.player.load(media, opts, function (err, status) {
+        if (err) {
+          log.e(`load error: ${err}`);
+          return;
+        }
+        log.i(`media loaded playerState=${status.playerState}`);
+      });
+      return;
+    }
+    this.player.close();
+    delete this.player;
+  }
+
+  this.client.launch(app, (err, player) => {
     this.player = player;
+    this.player.appId = appId;
     this.player.on('status', function (status) {
+      if (err) {
+        log.e(`status error: ${err}`);
+        return;
+      }
       log.i(`status broadcast playerState=${status.playerState}`);
     });
     this.player.on('close', () => {
@@ -51,13 +90,12 @@ CastDevice.prototype.sendMediaToClient = function (title, mediaUrl, mimeType) {
     });
 
     log.i(`app "${player.session.displayName}" launched, loading media ${media.contentId} ...`);
-    this.player.load(media, { autoplay: true }, function (err, status) {
-      if (status) {
-        log.i(`media loaded playerState=${status.playerState}`);
+    this.player.load(media, opts, function (err, status) {
+      if (err) {
+        log.e(`load error: ${err}`);
+        return;
       }
-      else if (err) {
-        log.e(`media load failed ${err}`);
-      }
+      log.i(`media loaded playerState=${status.playerState}`);
     });
   });
 }
