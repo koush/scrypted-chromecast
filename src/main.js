@@ -9,6 +9,9 @@ const Client = require('castv2-client').Client;
 const DefaultMediaReceiver = require('castv2-client').DefaultMediaReceiver;
 import memoizeOne from 'memoize-one';
 
+import sdk from '@scrypted/sdk';
+const { mediaManager, log } = sdk;
+
 function ScryptedMediaReceiver() {
   DefaultMediaReceiver.apply(this, arguments);
 }
@@ -145,9 +148,11 @@ CastDevice.prototype.sendMedia = function (title, mediaUrl, mimeType) {
   });
 }
 
-
-
-const audioFetch = (body) => mediaConverter.convert(body).to('android.net.Uri', 'audio/*');
+const audioFetch = (body) => {
+  var mo  = mediaManager.createMediaObject(Buffer.from(body), 'text/plain');
+  console.log(mo.toString());
+  return mediaManager.convertMediaObjectToUri(mo, 'audio/*');
+}
 const memoizeAudioFetch = memoizeOne(audioFetch);
 
 CastDevice.prototype.sendNotificationToHost = function (title, body, media, mimeType) {
@@ -158,16 +163,15 @@ CastDevice.prototype.sendNotificationToHost = function (title, body, media, mime
     // For example, a MediaObject from a RTSP camera can be converted to an externally
     // accessible Uri png image using mediaConverter.convert.
     memoizeAudioFetch(body)
-      .setCallback((e, result) => {
+      .then(result => {
         this.sendMedia(title, result.toString(), 'audio/*');
       });
     return;
   }
 
-  mediaConverter.convert(media, mimeType)
-    .to('android.net.Uri', mimeType)
-    .setCallback((e, result) => {
-      this.sendMedia(title, result.toString(), mimeType);
+  mediaManager.convertMediaObjectToUri(media)
+    .then(result => {
+      this.sendMedia(title, result, mimeType);
     });
 }
 
@@ -179,7 +183,7 @@ CastDevice.prototype.sendNotification = function (title, body, media, mimeType) 
     return;
   }
 
-  this.sendNotificationToHost(title, body, media, mimeType);
+  setImmediate(() => this.sendNotificationToHost(title, body, media, mimeType));
 }
 
 function DeviceProvider() {
@@ -201,7 +205,7 @@ function DeviceProvider() {
     var interfaces = ['Notifier', 'MediaPlayer'];
 
     var device = {
-      id,
+      nativeId: id,
       name,
       model,
       type,
