@@ -102,11 +102,13 @@ CastDevice.prototype.sendMediaToClient = function (title, mediaUrl, mimeType, op
 }
 
 CastDevice.prototype.load = function(media, options) {
-  const mimeType = options && options.mimeType;
-  mediaConverter.convert(media, mimeType)
-  .to('android.net.Uri')
-  .setCallback((e, result) => {
-    this.sendMedia(options && options.title, result.toString(), mimeType, options);
+  // the mediaManager is provided by Scrypted and can be used to convert
+  // MediaObjects into other objects.
+  // For example, a MediaObject from a RTSP camera can be converted to an externally
+  // accessible Uri png image using mediaManager.convert.
+  mediaManager.convertMediaObjectToUri(media)
+  .then(result => {
+    this.sendMedia(options && options.title, result, media.mimeType, options);
   });
 }
 
@@ -157,11 +159,6 @@ const memoizeAudioFetch = memoizeOne(audioFetch);
 
 CastDevice.prototype.sendNotificationToHost = function (title, body, media, mimeType) {
   if (!media || this.device.type == 'Speaker') {
-
-    // the mediaConvert variable is provided by Scrypted and can be used to convert
-    // MediaObjects into other objects.
-    // For example, a MediaObject from a RTSP camera can be converted to an externally
-    // accessible Uri png image using mediaConverter.convert.
     memoizeAudioFetch(body)
       .then(result => {
         this.sendMedia(title, result.toString(), 'audio/*');
