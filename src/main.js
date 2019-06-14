@@ -162,6 +162,9 @@ CastDevice.prototype.sendNotificationToHost = function (title, body, media, mime
     memoizeAudioFetch(body)
       .then(result => {
         this.sendMedia(title, result.toString(), 'audio/*');
+      })
+      .catch(e => {
+        log.e(`error memoizing audio ${e}`);
       });
     return;
   }
