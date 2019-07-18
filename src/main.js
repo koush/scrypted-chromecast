@@ -151,20 +151,26 @@ CastDevice.prototype.sendMedia = function (title, mediaUrl, mimeType) {
 }
 
 const audioFetch = (body) => {
-  var mo  = mediaManager.createMediaObject(Buffer.from(body), 'text/plain');
+  var buf = Buffer.from(body);
+  var mo  = mediaManager.createMediaObject(buf, 'text/plain');
   console.log(mo.toString());
   return mediaManager.convertMediaObjectToUri(mo, 'audio/*');
 }
-const memoizeAudioFetch = memoizeOne(audioFetch);
+// memoize this text conversion, as announcements going to multiple speakers will
+// trigger multiple text to speech conversions.
+// this is a simple way to prevent thrashing by waiting for the single promise.
+var memoizeAudioFetch = memoizeOne(audioFetch);
 
 CastDevice.prototype.sendNotificationToHost = function (title, body, media, mimeType) {
   if (!media || this.device.type == 'Speaker') {
-    memoizeAudioFetch(body)
+    audioFetch(body)
       .then(result => {
         this.sendMedia(title, result.toString(), 'audio/*');
       })
       .catch(e => {
         log.e(`error memoizing audio ${e}`);
+        // do not cache errors.
+        memoizeAudioFetch = memoizeOne(audioFetch);
       });
     return;
   }
