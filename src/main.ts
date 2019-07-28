@@ -395,12 +395,16 @@ class CastDeviceProvider extends ScryptedDeviceBase implements DeviceProvider {
 
       var interfaces = ['Notifier', 'MediaPlayer', 'Refresh'];
 
-      var device = {
+      var device: Device = {
         nativeId: id,
         name,
         model,
         type,
         interfaces,
+        metadata: {
+          syncWithIntegrations: false,
+          syncWithGoogle: false,
+        },
       };
 
       var host = service.addresses[0];
