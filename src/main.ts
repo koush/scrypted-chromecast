@@ -2,6 +2,7 @@ const fs = require('fs');
 const util = require('util');
 import { resolve } from 'path';
 fs.registerFile(resolve('../node_modules/castv2/lib/cast_channel.proto'), require('raw-loader!../node_modules/castv2/lib/cast_channel.proto'))
+// fs.registerFile(resolve('../node_modules/castv2/lib/cast_channel.proto'), require('raw-loader!../node_modules/castv2/lib/cast_channel.proto'))
 
 const mdns = require('mdns');
 import EventEmitter from 'events';
@@ -9,7 +10,8 @@ const Client = require('castv2-client').Client;
 const DefaultMediaReceiver = require('castv2-client').DefaultMediaReceiver;
 import memoizeOne from 'memoize-one';
 
-import sdk, { ScryptedDeviceBase, DeviceProvider, ScryptedDeviceType, Device, MediaPlayer, Notifier } from '@scrypted/sdk';
+import sdk, { ScryptedDeviceBase, DeviceProvider, ScryptedDeviceType, Device, MediaPlayer, Notifier, MediaStatus, Refresh, MediaPlayerState, ScryptedInterface } from '@scrypted/sdk';
+import { stat } from 'fs';
 const { mediaManager, deviceManager } = sdk;
 
 function ScryptedMediaReceiver() {
@@ -29,10 +31,8 @@ const audioFetch = (body) => {
 var memoizeAudioFetch = memoizeOne(audioFetch);
 
 
-class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer {
+class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Refresh {
   provider: CastDeviceProvider;
-  player: any;
-  client: any;
   host: any;
   device: Device;
 
@@ -41,6 +41,92 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer {
     this.provider = provider;
   }
 
+  currentApp: string;
+  playerPromise: Promise<any>;
+  connectPlayer(app: string): Promise<any> {
+    if (this.playerPromise) {
+      if (this.currentApp === app) {
+        return this.playerPromise;
+      }
+
+      this.playerPromise.then(player => {
+        player.removeAllListeners();
+        player.close();
+      });
+      this.playerPromise = undefined;
+    }
+
+    this.currentApp = app;
+    return this.playerPromise = this.connectClient()
+      .then(client => {
+        return new Promise((resolve, reject) => {
+          client.launch(app, (err, player) => {
+            if (err) {
+              reject(err);
+              return;
+            }
+
+            player.on('close', () => {
+              this.log.i('player closed');
+              player.removeAllListeners();
+              this.playerPromise = undefined;
+            });
+
+            this.log.i('player launched.');
+            resolve(player);
+          });
+        });
+      })
+      .catch(err => {
+        this.playerPromise = undefined;
+        throw err;
+      });
+  }
+
+  clientPromise: Promise<any>;
+  connectClient(): Promise<any> {
+    if (this.clientPromise) {
+      return this.clientPromise;
+    }
+
+    var promise;
+    var resolved = false;
+    return this.clientPromise = promise = new Promise((resolve, reject) => {
+      var client = new Client();
+
+      client.on('error', err => {
+        this.log.i(`Client error: ${err.message}`);
+        client.removeAllListeners();
+        client.close();
+
+        if (this.clientPromise === promise) {
+          this.clientPromise = undefined;
+        }
+
+        if (!resolved) {
+          resolved = true;
+          reject(err);
+        }
+      });
+
+      client.on('status', status => {
+        this.log.i(JSON.stringify(status));
+        this.joinPlayer()
+          .catch(() => { });
+      })
+
+      client.connect(this.host, () => {
+        this.log.i(`client connected.`);
+        resolved = true;
+        resolve(client);
+      });
+    })
+      .catch(err => {
+        this.log.i(`client connect error: ${err.message}`);
+        this.clientPromise = undefined;
+        throw err;
+      })
+  }
 
   sendMediaToClient(title, mediaUrl, mimeType, opts?) {
     var media = {
@@ -64,60 +150,30 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer {
     };
 
     var app;
-    var appId;
     if (!mediaUrl.startsWith('http')) {
       app = ScryptedMediaReceiver;
     }
     else {
       app = DefaultMediaReceiver;
     }
-    appId = app.APP_ID;
 
     opts = opts || {
       autoplay: true,
     }
 
-    var load = () => {
-      this.player.load(media, opts, (err, status) => {
-        if (err) {
-          this.log.e(`load error: ${err}`);
-          return;
-        }
-        this.log.i(`media loaded playerState=${status.playerState}`);
+    this.connectPlayer(app)
+      .then(player => {
+        player.load(media, opts, (err, status) => {
+          if (err) {
+            this.log.e(`load error: ${err}`);
+            return;
+          }
+          this.log.i(`media loaded playerState=${status.playerState}`);
+        });
+      })
+      .catch(err => {
+        this.log.e(`connect error: ${err}`);
       });
-    };
-
-    if (this.player) {
-      if (this.player.appId == appId) {
-        load();
-        return;
-      }
-      this.player.close();
-      delete this.player;
-    }
-
-    this.client.launch(app, (err, player) => {
-      this.player = player;
-      this.player.appId = appId;
-      this.player.on('status', (status) => {
-        if (err) {
-          this.log.e(`status error: ${err}`);
-          return;
-        }
-        this.log.i(`status broadcast playerState=${status.playerState}`);
-      });
-      this.player.on('close', () => {
-        this.log.i('player closed');
-        delete this.player;
-        if (this.client) {
-          this.client.close();
-          delete this.client;
-        }
-      });
-
-      this.log.i(`app "${player.session.displayName}" launched, loading media ${media.contentId} ...`);
-      load();
-    });
   }
 
   load(media, options) {
@@ -127,53 +183,162 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer {
     // accessible Uri png image using mediaManager.convert.
     mediaManager.convertMediaObjectToUrl(media, null)
       .then(result => {
-        this.sendMedia(options && options.title, result, media.mimeType);
+        this.sendMediaToClient(options && options.title, result, media.mimeType);
       });
   }
 
-  play() {
-    if (this.player)
-      this.player.play();
-  }
-
-  pause() {
-    if (this.player)
-      this.player.pause();
-  }
-
-  stop() {
-    if (this.player)
-      this.player.stop();
-  }
-
-  sendMedia(title, mediaUrl, mimeType) {
-    if (this.client) {
-      this.log.i('reusing client')
-      this.sendMediaToClient(title, mediaUrl, mimeType);
-      return;
+  static CastInactive = new Error('Media player is inactive.');
+  mediaPlayerPromise: Promise<any>;
+  mediaPlayerStatus: any;
+  joinPlayer() {
+    if (this.mediaPlayerPromise) {
+      return this.mediaPlayerPromise;
     }
 
-    this.client = new Client();
+    this.log.i('attempting to join session');
+    return this.mediaPlayerPromise = this.connectClient()
+      .then(client => {
+        return new Promise((resolve, reject) => {
+          client.getSessions((err, applications) => {
+            if (err) {
+              reject(err);
+              return;
+            }
 
-    this.client.connect(this.host, () => {
-      this.sendMediaToClient(title, mediaUrl, mimeType);
-    });
+            if (!applications || !applications.length) {
+              this.mediaPlayerStatus = undefined;
+              this.updateState();
+              reject(CastDevice.CastInactive);
+              return;
+            }
+            client.join(applications[0], DefaultMediaReceiver, (err, player) => {
+              if (err) {
+                reject(err);
+                return;
+              }
 
-    this.client.on('error', (err) => {
-      this.log.i(`Error: ${err.message}`);
-      delete this.player;
-      if (this.client) {
-        this.client.close();
-        delete this.client;
-      }
-    });
+              player.on('close', () => {
+                this.log.i('player closed');
+                player.removeAllListeners();
+                this.mediaPlayerPromise = undefined;
+                this.mediaPlayerStatus = undefined;
+                this.updateState();
+              });
+
+              player.on('status', () => {
+                player.getStatus((err, status) => {
+                  if (err) {
+                    return;
+                  }
+                  this.mediaPlayerStatus = status;
+                  this.updateState();
+                });
+              })
+
+              player.getStatus((err, status) => {
+                if (err) {
+                  reject(err);
+                  return;
+                }
+                this.mediaPlayerStatus = status;
+                this.updateState();
+                resolve(player);
+              })
+            });
+          });
+        });
+      })
+      .catch(e => {
+        this.log.e(`Error connecting to current session ${e}`);
+        this.mediaPlayerPromise = undefined;
+        throw e;
+      })
+  }
+
+  start() {
+    this.joinPlayer()
+      .then(player => player.play());
+  }
+  pause() {
+    this.joinPlayer()
+      .then(player => player.pause());
+  }
+  parseState(): MediaPlayerState {
+    if (!this.mediaPlayerStatus) {
+      return MediaPlayerState.Idle;
+    }
+    switch (this.mediaPlayerStatus.playerState) {
+      case "PLAYING":
+        return MediaPlayerState.Playing;
+      case "PAUSED":
+        return MediaPlayerState.Paused;
+      case "IDLE":
+        return MediaPlayerState.Idle;
+      case "BUFFERING":
+        return MediaPlayerState.Buffering;
+    }
+  }
+
+  stateTimestamp: number;
+  updateState() {
+    this.stateTimestamp = Date.now();
+    const mediaPlayerStatus = this.getMediaStatus();
+    switch (mediaPlayerStatus.mediaPlayerState) {
+      case MediaPlayerState.Idle:
+        this.running = false;
+        break;
+      case MediaPlayerState.Paused:
+      case MediaPlayerState.Buffering:
+      case MediaPlayerState.Playing:
+      default:
+        this.running = true;
+        break;
+    }
+    this.paused = mediaPlayerStatus.mediaPlayerState === MediaPlayerState.Paused;
+    deviceManager.onDeviceEvent(this.nativeId, ScryptedInterface.MediaPlayer, mediaPlayerStatus);
+  }
+  getMediaStatus(): MediaStatus {
+    var mediaPlayerState: MediaPlayerState = this.parseState();
+    const media = this.mediaPlayerStatus && this.mediaPlayerStatus.media;
+    const metadata = media && media.metadata;
+    let position = this.mediaPlayerStatus && this.mediaPlayerStatus.currentTime;
+    if (position) {
+      position += (Date.now() - this.stateTimestamp) / 1000;
+    }
+    return {
+      mediaPlayerState,
+      duration: media && media.duration,
+      position,
+      metadata,
+    };
+  }
+  seek(milliseconds: number): void {
+    this.joinPlayer()
+      .then(player => player.seek(milliseconds));
+  }
+  resume(): void {
+    this.joinPlayer()
+      .then(player => player.play());
+  }
+  stop() {
+    this.joinPlayer()
+      .then(player => player.stop());
+  }
+  skipNext(): void {
+    console.log('ok');
+    this.joinPlayer()
+      .then(player => player.media.sessionRequest({ type: 'QUEUE_NEXT' }));
+  }
+  skipPrevious(): void {
+    this.joinPlayer()
+      .then(player => player.media.sessionRequest({ type: 'QUEUE_PREV' }));
   }
 
   sendNotificationToHost(title, body, media, mimeType) {
     if (!media || this.type == 'Speaker') {
       memoizeAudioFetch(body)
         .then(result => {
-          this.sendMedia(title, result.toString(), 'audio/*');
+          this.sendMediaToClient(title, result.toString(), 'audio/*');
         })
         .catch(e => {
           this.log.e(`error memoizing audio ${e}`);
@@ -185,7 +350,7 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer {
 
     mediaManager.convertMediaObjectToUrl(media, null)
       .then(result => {
-        this.sendMedia(title, result, mimeType);
+        this.sendMediaToClient(title, result, mimeType);
       });
   }
 
@@ -199,7 +364,13 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer {
 
     setImmediate(() => this.sendNotificationToHost(title, body, media, mimeType));
   }
-
+  getRefreshFrequency(): number {
+    return 60;
+  }
+  refresh(refreshInterface: string, userInitiated: boolean): void {
+    this.joinPlayer()
+      .catch(() => { });
+  }
 }
 
 class CastDeviceProvider extends ScryptedDeviceBase implements DeviceProvider {
@@ -222,7 +393,7 @@ class CastDeviceProvider extends ScryptedDeviceBase implements DeviceProvider {
       var name = service.txtRecord.fn;
       var type = (model && model.indexOf('Google Home') != -1 && model.indexOf('Hub') == -1) ? ScryptedDeviceType.Speaker : ScryptedDeviceType.Display;
 
-      var interfaces = ['Notifier', 'MediaPlayer'];
+      var interfaces = ['Notifier', 'MediaPlayer', 'Refresh'];
 
       var device = {
         nativeId: id,
