@@ -1,18 +1,20 @@
+'use strict';
+
 const fs = require('fs');
 const util = require('util');
-import { resolve } from 'path';
-fs.registerFile(resolve('../node_modules/castv2/lib/cast_channel.proto'), require('raw-loader!../node_modules/castv2/lib/cast_channel.proto'))
+import sdk, { Device, DeviceProvider, MediaPlayer, MediaPlayerState, MediaStatus, Notifier, Refresh, ScryptedDeviceBase, ScryptedDeviceType, ScryptedInterface } from '@scrypted/sdk';
+import {EventEmitter} from 'events';
+import memoizeOne from 'memoize-one';
+
+const { mediaManager, deviceManager, log } = sdk;
+
+// fs.registerFile(resolve('../node_modules/castv2/lib/cast_channel.proto'), require('raw-loader!../node_modules/castv2/lib/cast_channel.proto'))
 // fs.registerFile(resolve('../node_modules/castv2/lib/cast_channel.proto'), require('raw-loader!../node_modules/castv2/lib/cast_channel.proto'))
 
 const mdns = require('mdns');
-import EventEmitter from 'events';
 const Client = require('castv2-client').Client;
 const DefaultMediaReceiver = require('castv2-client').DefaultMediaReceiver;
-import memoizeOne from 'memoize-one';
 
-import sdk, { ScryptedDeviceBase, DeviceProvider, ScryptedDeviceType, Device, MediaPlayer, Notifier, MediaStatus, Refresh, MediaPlayerState, ScryptedInterface } from '@scrypted/sdk';
-import { stat } from 'fs';
-const { mediaManager, deviceManager } = sdk;
 
 function ScryptedMediaReceiver() {
   DefaultMediaReceiver.apply(this, arguments);
@@ -30,6 +32,39 @@ const audioFetch = (body) => {
 // this is a simple way to prevent thrashing by waiting for the single promise.
 var memoizeAudioFetch = memoizeOne(audioFetch);
 
+// castv2 makes the the assumption that protobufjs returns Buffers, which is does not. It returns ArrayBuffers
+// in the quickjs environment.
+function toBuffer(buffer) {
+  if (buffer && (buffer.constructor.name === ArrayBuffer.name || buffer.constructor.name === Uint8Array.name)) {
+      var ret = Buffer.from(buffer);
+      return ret;
+  }
+  return buffer;
+}
+const BufferConcat = Buffer.concat;
+Buffer.concat = function(bufs) {
+  var copy = [];
+  for (var buf of bufs) {
+    copy.push(toBuffer(buf));
+  }
+  return BufferConcat(copy);
+}
+
+// const Buffer = require('buffer');
+// const BufferConcat = Buffer.concat;
+// Buffer.concat = function(buffers) {
+//   var fixed = [];
+//   for (let buffer of buffers) {
+//     if (buffer.constructor.name !== 'Buffer') {
+//       fixed.push(Buffer.from(buffer));
+//     }
+//     else {
+//       fixed.push(buffer);
+//     }
+//   }
+
+//   return BufferConcat(fixed);
+// }
 
 class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Refresh {
   provider: CastDeviceProvider;
@@ -60,6 +95,7 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
     return this.playerPromise = this.connectClient()
       .then(client => {
         return new Promise((resolve, reject) => {
+          this.log.i('launching');
           client.launch(app, (err, player) => {
             if (err) {
               reject(err);
@@ -195,9 +231,10 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
       return this.mediaPlayerPromise;
     }
 
-    this.log.i('attempting to join session');
+    this.log.i('attempting to join session2');
     return this.mediaPlayerPromise = this.connectClient()
       .then(client => {
+        this.log.i('attempting to join session');
         return new Promise((resolve, reject) => {
           client.getSessions((err, applications) => {
             if (err) {
@@ -325,7 +362,6 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
       .then(player => player.stop());
   }
   skipNext(): void {
-    console.log('ok');
     this.joinPlayer()
       .then(player => player.media.sessionRequest({ type: 'QUEUE_NEXT' }));
   }
@@ -336,8 +372,10 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
 
   sendNotificationToHost(title, body, media, mimeType) {
     if (!media || this.type == 'Speaker') {
+      log.i('fetching audio: ' + body);
       memoizeAudioFetch(body)
         .then(result => {
+          log.i('sending audio');
           this.sendMediaToClient(title, result.toString(), 'audio/*');
         })
         .catch(e => {
