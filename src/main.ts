@@ -25,7 +25,7 @@ util.inherits(ScryptedMediaReceiver, DefaultMediaReceiver);
 const audioFetch = (body) => {
   var buf = Buffer.from(body);
   var mo = mediaManager.createMediaObject(buf, 'text/plain');
-  return mediaManager.convertMediaObjectToUrl(mo, 'audio/*');
+  return mediaManager.convertMediaObjectToLocalUrl(mo, 'audio/*');
 }
 // memoize this text conversion, as announcements going to multiple speakers will
 // trigger multiple text to speech conversions.
@@ -375,8 +375,9 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
       log.i('fetching audio: ' + body);
       memoizeAudioFetch(body)
         .then(result => {
-          log.i('sending audio');
-          this.sendMediaToClient(title, result.toString(), 'audio/*');
+          const insecure = result.toString().replace('https://', 'http://').replace(':9443', ':9080');
+          this.log.i(`sending audio ${insecure}`);
+          this.sendMediaToClient(title, insecure, 'audio/*');
         })
         .catch(e => {
           this.log.e(`error memoizing audio ${e}`);
@@ -388,6 +389,7 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
 
     mediaManager.convertMediaObjectToUrl(media, null)
       .then(result => {
+        this.log.i(`url: ${result}`);
         this.sendMediaToClient(title, result, mimeType);
       });
   }
