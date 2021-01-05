@@ -375,7 +375,7 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
       log.i('fetching audio: ' + body);
       memoizeAudioFetch(body)
         .then(result => {
-          const insecure = result.toString().replace('https://', 'http://').replace(':9443', ':9080');
+          const insecure = result.toString().replace('https://', 'http://').replace(':9443', ':10080');
           this.log.i(`sending audio ${insecure}`);
           this.sendMediaToClient(title, insecure, 'audio/*');
         })
