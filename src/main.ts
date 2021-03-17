@@ -1,20 +1,14 @@
 'use strict';
 
-const fs = require('fs');
-const util = require('util');
-import sdk, { Device, DeviceProvider, MediaPlayer, MediaPlayerState, MediaStatus, Notifier, Refresh, ScryptedDeviceBase, ScryptedDeviceType, ScryptedInterface } from '@scrypted/sdk';
-import {EventEmitter} from 'events';
+import util from 'util';
+import sdk, { Device, DeviceProvider, MediaObject, MediaPlayer, MediaPlayerOptions, MediaPlayerState, MediaStatus, Notifier, Refresh, ScryptedDeviceBase, ScryptedDeviceType, ScryptedInterface } from '@scrypted/sdk';
+import { EventEmitter } from 'events';
 import memoizeOne from 'memoize-one';
+import mdns from 'mdns';
 
 const { mediaManager, deviceManager, log } = sdk;
-
-// fs.registerFile(resolve('../node_modules/castv2/lib/cast_channel.proto'), require('raw-loader!../node_modules/castv2/lib/cast_channel.proto'))
-// fs.registerFile(resolve('../node_modules/castv2/lib/cast_channel.proto'), require('raw-loader!../node_modules/castv2/lib/cast_channel.proto'))
-
-const mdns = require('mdns');
+const { DefaultMediaReceiver } = require('castv2-client');
 const Client = require('castv2-client').Client;
-const DefaultMediaReceiver = require('castv2-client').DefaultMediaReceiver;
-
 
 function ScryptedMediaReceiver() {
   DefaultMediaReceiver.apply(this, arguments);
@@ -25,7 +19,7 @@ util.inherits(ScryptedMediaReceiver, DefaultMediaReceiver);
 const audioFetch = (body) => {
   var buf = Buffer.from(body);
   var mo = mediaManager.createMediaObject(buf, 'text/plain');
-  return mediaManager.convertMediaObjectToLocalUrl(mo, 'audio/*');
+  return mediaManager.convertMediaObjectToInsecureLocalUrl(mo, 'audio/*');
 }
 // memoize this text conversion, as announcements going to multiple speakers will
 // trigger multiple text to speech conversions.
@@ -36,13 +30,13 @@ var memoizeAudioFetch = memoizeOne(audioFetch);
 // in the quickjs environment.
 function toBuffer(buffer) {
   if (buffer && (buffer.constructor.name === ArrayBuffer.name || buffer.constructor.name === Uint8Array.name)) {
-      var ret = Buffer.from(buffer);
-      return ret;
+    var ret = Buffer.from(buffer);
+    return ret;
   }
   return buffer;
 }
 const BufferConcat = Buffer.concat;
-Buffer.concat = function(bufs) {
+Buffer.concat = function (bufs) {
   var copy = [];
   for (var buf of bufs) {
     copy.push(toBuffer(buf));
@@ -50,26 +44,11 @@ Buffer.concat = function(bufs) {
   return BufferConcat(copy);
 }
 
-// const Buffer = require('buffer');
-// const BufferConcat = Buffer.concat;
-// Buffer.concat = function(buffers) {
-//   var fixed = [];
-//   for (let buffer of buffers) {
-//     if (buffer.constructor.name !== 'Buffer') {
-//       fixed.push(Buffer.from(buffer));
-//     }
-//     else {
-//       fixed.push(buffer);
-//     }
-//   }
-
-//   return BufferConcat(fixed);
-// }
-
 class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Refresh {
   provider: CastDeviceProvider;
   host: any;
   device: Device;
+  port: number;
 
   constructor(provider: CastDeviceProvider, nativeId: string) {
     super(nativeId);
@@ -129,42 +108,31 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
     var resolved = false;
     return this.clientPromise = promise = new Promise((resolve, reject) => {
       var client = new Client();
-
       client.on('error', err => {
         this.log.i(`Client error: ${err.message}`);
         client.removeAllListeners();
         client.close();
-
         if (this.clientPromise === promise) {
           this.clientPromise = undefined;
         }
-
         if (!resolved) {
           resolved = true;
           reject(err);
         }
       });
-
-      client.on('status', status => {
+      client.on('status', async status => {
         this.log.i(JSON.stringify(status));
-        this.joinPlayer()
-          .catch(() => { });
+        await this.joinPlayer();
       })
-
       client.connect(this.host, () => {
         this.log.i(`client connected.`);
         resolved = true;
         resolve(client);
       });
     })
-      .catch(err => {
-        this.log.i(`client connect error: ${err.message}`);
-        this.clientPromise = undefined;
-        throw err;
-      })
   }
 
-  sendMediaToClient(title, mediaUrl, mimeType, opts?) {
+  async sendMediaToClient(title, mediaUrl, mimeType, opts?) {
     var media = {
       // Here you can plug an URL to any mp4, webm, mp3 or jpg file with the proper contentType.
       contentId: mediaUrl,
@@ -197,30 +165,23 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
       autoplay: true,
     }
 
-    this.connectPlayer(app)
-      .then(player => {
-        player.load(media, opts, (err, status) => {
-          if (err) {
-            this.log.e(`load error: ${err}`);
-            return;
-          }
-          this.log.i(`media loaded playerState=${status.playerState}`);
-        });
-      })
-      .catch(err => {
-        this.log.e(`connect error: ${err}`);
-      });
+    const player = await this.connectPlayer(app)
+    player.load(media, opts, (err, status) => {
+      if (err) {
+        this.log.e(`load error: ${err}`);
+        return;
+      }
+      this.log.i(`media loaded playerState=${status.playerState}`);
+    });
   }
 
-  load(media, options) {
+  async load(media: MediaObject, options: MediaPlayerOptions) {
     // the mediaManager is provided by Scrypted and can be used to convert
     // MediaObjects into other objects.
     // For example, a MediaObject from a RTSP camera can be converted to an externally
     // accessible Uri png image using mediaManager.convert.
-    mediaManager.convertMediaObjectToUrl(media, null)
-      .then(result => {
-        this.sendMediaToClient(options && options.title, result, media.mimeType);
-      });
+    const result = await mediaManager.convertMediaObjectToUrl(media, null)
+    this.sendMediaToClient(options && (options as any).title, result, media.mimeType);
   }
 
   static CastInactive = new Error('Media player is inactive.');
@@ -292,13 +253,13 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
       })
   }
 
-  start() {
-    this.joinPlayer()
-      .then(player => player.play());
+  async start() {
+    const player = await this.joinPlayer();
+    player.start();
   }
-  pause() {
-    this.joinPlayer()
-      .then(player => player.pause());
+  async pause() {
+    const player = await this.joinPlayer();
+    player.pause();
   }
   parseState(): MediaPlayerState {
     if (!this.mediaPlayerStatus) {
@@ -349,25 +310,25 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
       metadata,
     };
   }
-  seek(milliseconds: number): void {
-    this.joinPlayer()
-      .then(player => player.seek(milliseconds));
+  async seek(milliseconds: number) {
+    const player = await this.joinPlayer();
+    player.seek(milliseconds);
   }
-  resume(): void {
-    this.joinPlayer()
-      .then(player => player.play());
+  async resume() {
+    const player = await this.joinPlayer();
+    player.play();
   }
-  stop() {
-    this.joinPlayer()
-      .then(player => player.stop());
+  async stop() {
+    const player = await this.joinPlayer();
+    player.stop();
   }
-  skipNext(): void {
-    this.joinPlayer()
-      .then(player => player.media.sessionRequest({ type: 'QUEUE_NEXT' }));
+  async skipNext() {
+    const player = await this.joinPlayer();
+    player.media.sessionRequest({ type: 'QUEUE_NEXT' });
   }
-  skipPrevious(): void {
-    this.joinPlayer()
-      .then(player => player.media.sessionRequest({ type: 'QUEUE_PREV' }));
+  async skipPrevious() {
+    const player = await this.joinPlayer();
+    player.media.sessionRequest({ type: 'QUEUE_PREV' });
   }
 
   sendNotificationToHost(title, body, media, mimeType) {
@@ -375,9 +336,8 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
       log.i('fetching audio: ' + body);
       memoizeAudioFetch(body)
         .then(result => {
-          const insecure = result.toString().replace('https://', 'http://').replace(':9443', ':10080');
-          this.log.i(`sending audio ${insecure}`);
-          this.sendMediaToClient(title, insecure, 'audio/*');
+          this.log.i(`sending audio ${result}`);
+          this.sendMediaToClient(title, result, 'audio/*');
         })
         .catch(e => {
           this.log.e(`error memoizing audio ${e}`);
@@ -433,7 +393,7 @@ class CastDeviceProvider extends ScryptedDeviceBase implements DeviceProvider {
       var name = service.txtRecord.fn;
       var type = (model && model.indexOf('Google Home') != -1 && model.indexOf('Hub') == -1) ? ScryptedDeviceType.Speaker : ScryptedDeviceType.Display;
 
-      var interfaces = ['Notifier', 'MediaPlayer', 'Refresh'];
+      var interfaces = ['Notifier', 'MediaPlayer', 'Refresh', 'StartStop', 'Pause',];
 
       var device: Device = {
         nativeId: id,
@@ -447,13 +407,16 @@ class CastDeviceProvider extends ScryptedDeviceBase implements DeviceProvider {
         },
       };
 
-      var host = service.addresses[0];
+      const host = service.addresses[0];
+      const port = service.port;
+
 
       this.log.i(`found cast device: ${name}`);
 
       var castDevice = this.devices[id] || (this.devices[id] = new CastDevice(this, device.nativeId));
       castDevice.device = device;
       castDevice.host = host;
+      castDevice.port = port;
 
       this.search.emit(id);
       deviceManager.onDeviceDiscovered(device);
