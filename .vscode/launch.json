@@ -12,7 +12,9 @@
         //     "port"        : 9091,
         //     "localRoot"   : "/Volumes/Dev/Scrypted/quack-polyfill/quack-polyfill-java/src/js/dist",
         //     "mode"         : "connect",
+
         //     "preLaunchTask": "scrypted: deploy+debug",
+
         //     // required due to webpack and transpiling
         //     "sourceMaps"  : {
         //         "${workspaceRoot}/out/main.quickjs.js.map": "",
