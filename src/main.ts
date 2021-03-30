@@ -364,7 +364,7 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
 
     setImmediate(() => this.sendNotificationToHost(title, body, media, mimeType));
   }
-  getRefreshFrequency(): number {
+  async getRefreshFrequency(): Promise<number> {
     return 60;
   }
   refresh(refreshInterface: string, userInitiated: boolean): void {
