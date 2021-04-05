@@ -1,19 +1,21 @@
 'use strict';
 
 import util from 'util';
-import sdk, { Device, DeviceProvider, MediaObject, MediaPlayer, MediaPlayerOptions, MediaPlayerState, MediaStatus, Notifier, Refresh, ScryptedDeviceBase, ScryptedDeviceType, ScryptedInterface } from '@scrypted/sdk';
+import sdk, { Device, DeviceProvider, EngineIOHandler, HttpRequest, MediaObject, MediaPlayer, MediaPlayerOptions, MediaPlayerState, MediaStatus, Notifier, Refresh, ScryptedDeviceBase, ScryptedDeviceType, ScryptedInterface, ScryptedMimeTypes } from '@scrypted/sdk';
 import { EventEmitter } from 'events';
 import memoizeOne from 'memoize-one';
 import mdns from 'mdns';
+import process from 'process';
+import mime from 'mime';
 
-const { mediaManager, deviceManager, log } = sdk;
+const { mediaManager, systemManager, endpointManager, deviceManager, log } = sdk;
 const { DefaultMediaReceiver } = require('castv2-client');
 const Client = require('castv2-client').Client;
 
 function ScryptedMediaReceiver() {
   DefaultMediaReceiver.apply(this, arguments);
 }
-ScryptedMediaReceiver.APP_ID = '9E3714BD';
+ScryptedMediaReceiver.APP_ID = '00F7C5DD';
 util.inherits(ScryptedMediaReceiver, DefaultMediaReceiver);
 
 const audioFetch = (body) => {
@@ -44,7 +46,7 @@ Buffer.concat = function (bufs) {
   return BufferConcat(copy);
 }
 
-class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Refresh {
+class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Refresh, EngineIOHandler {
   provider: CastDeviceProvider;
   host: any;
   device: Device;
@@ -55,17 +57,21 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
     this.provider = provider;
   }
 
-  currentApp: string;
+  currentApp: any;
   playerPromise: Promise<any>;
-  connectPlayer(app: string): Promise<any> {
+  connectPlayer(app: any): Promise<any> {
     if (this.playerPromise) {
-      if (this.currentApp === app) {
+      if (this.currentApp === app && this.clientPromise) {
         return this.playerPromise;
       }
 
       this.playerPromise.then(player => {
         player.removeAllListeners();
-        player.close();
+        try {
+          player.close();
+        }
+        catch (e) {
+        }
       });
       this.playerPromise = undefined;
     }
@@ -105,35 +111,41 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
     }
 
     var promise;
-    var resolved = false;
     return this.clientPromise = promise = new Promise((resolve, reject) => {
       var client = new Client();
-      client.on('error', err => {
-        this.log.i(`Client error: ${err.message}`);
+
+      const cleanup = () => {
         client.removeAllListeners();
         client.close();
         if (this.clientPromise === promise) {
           this.clientPromise = undefined;
         }
-        if (!resolved) {
-          resolved = true;
-          reject(err);
-        }
+      }
+      client.on('close', cleanup);
+      client.on('error', err => {
+        this.log.i(`Client error: ${err.message}`);
+        cleanup();
+        reject(err);
       });
       client.on('status', async status => {
         this.log.i(JSON.stringify(status));
-        await this.joinPlayer();
+        try {
+          await this.joinPlayer();
+        }
+        catch (e) {
+        }
       })
       client.connect(this.host, () => {
         this.log.i(`client connected.`);
-        resolved = true;
         resolve(client);
       });
     })
   }
 
-  async sendMediaToClient(title, mediaUrl, mimeType, opts?) {
-    var media = {
+  tokens = new Map<string, MediaObject>();
+
+  async sendMediaToClient(title: string, mediaUrl: string, mimeType: string, opts?: any) {
+    var media: any = {
       // Here you can plug an URL to any mp4, webm, mp3 or jpg file with the proper contentType.
       contentId: mediaUrl,
       contentType: mimeType,
@@ -148,24 +160,14 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
 
       // these are internal APIs. TODO: make them public.
       customData: {
-        senderId: pushManager.getSenderId(),
-        registrationId: pushManager.getRegistrationId(),
       }
     };
-
-    var app;
-    if (!mediaUrl.startsWith('http')) {
-      app = ScryptedMediaReceiver;
-    }
-    else {
-      app = DefaultMediaReceiver;
-    }
 
     opts = opts || {
       autoplay: true,
     }
 
-    const player = await this.connectPlayer(app)
+    const player = await this.connectPlayer(DefaultMediaReceiver)
     player.load(media, opts, (err, status) => {
       if (err) {
         this.log.e(`load error: ${err}`);
@@ -175,16 +177,95 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
     });
   }
 
-  async load(media: MediaObject, options: MediaPlayerOptions) {
-    // the mediaManager is provided by Scrypted and can be used to convert
-    // MediaObjects into other objects.
-    // For example, a MediaObject from a RTSP camera can be converted to an externally
-    // accessible Uri png image using mediaManager.convert.
-    const result = await mediaManager.convertMediaObjectToUrl(media, null)
-    this.sendMediaToClient(options && (options as any).title, result, media.mimeType);
+  async load(media: string|MediaObject, options: MediaPlayerOptions) {
+    // check to see if this is url friendly media.
+    if (typeof media === 'string')
+      media = mediaManager.createMediaObject(media, ScryptedMimeTypes.Url);
+
+    if (media.mimeType === ScryptedMimeTypes.LocalUrl ||
+      media.mimeType === ScryptedMimeTypes.InsecureLocalUrl ||
+      media.mimeType === ScryptedMimeTypes.Url ||
+      media.mimeType.startsWith('image/') ||
+      media.mimeType.startsWith('video/')) {
+
+      // chromecast can handle insecure local urls, but not self signed secure urls.
+      const url = media.mimeType === ScryptedMimeTypes.InsecureLocalUrl || media.mimeType === ScryptedMimeTypes.LocalUrl
+        ? await mediaManager.convertMediaObjectToInsecureLocalUrl(media, media.mimeType)
+        : await mediaManager.convertMediaObjectToUrl(media, media.mimeType);
+      this.sendMediaToClient(options && (options as any).title,
+        url,
+        // prefer the provided mime type hint, otherwise infer from url.
+        options.mimeType || mime.getType(url));
+      return;
+    }
+
+    // this media object is something weird that can't be handled by a straightforward url.
+    // try to make a webrtc a/v session to handle it.
+
+    const engineio = await endpointManager.getPublicLocalEndpoint(this.nativeId) + 'engine.io/';
+    const mo = mediaManager.createMediaObject(engineio, ScryptedMimeTypes.LocalUrl);
+    const cameraStreamAuthToken = await mediaManager.convertMediaObjectToUrl(mo, ScryptedMimeTypes.LocalUrl);
+    const token = Math.random().toString();
+    this.tokens.set(token, media);
+
+    var castMedia: any = {
+      contentId: cameraStreamAuthToken,
+      contentType: ScryptedMimeTypes.LocalUrl,
+      streamType: 'LIVE',
+
+      // Title and cover displayed while buffering
+      metadata: {
+        type: 0,
+        metadataType: 0,
+        title: options?.title || 'Scrypted',
+      },
+
+      customData: {
+        token,
+      }
+    };
+
+    const opts = {
+      autoplay: true,
+    }
+
+    const player = await this.connectPlayer(ScryptedMediaReceiver as any)
+    player.load(castMedia, opts, (err, status) => {
+      if (err) {
+        this.log.e(`load error: ${err}`);
+        return;
+      }
+      this.log.i(`media loaded playerState=${status.playerState}`);
+    });
   }
 
-  static CastInactive = new Error('Media player is inactive.');
+
+  async onConnection(request: HttpRequest, webSocketUrl: string) {
+    const ws = new WebSocket(webSocketUrl);
+
+    ws.onmessage = async (message) => {
+      const token = message.data as string;
+
+      const media = this.tokens.get(token);
+      if (!media) {
+        ws.close();
+        return;
+      }
+
+      const offer = await mediaManager.convertMediaObjectToBuffer(
+        media,
+        ScryptedMimeTypes.RTCAVOffer
+      );
+
+      ws.send(offer.toString());
+
+      const answer = await new Promise(resolve => ws.onmessage = (message) => resolve(message.data));
+      const mo = mediaManager.createMediaObject(Buffer.from(answer as string), ScryptedMimeTypes.RTCAVAnswer);
+      mediaManager.convertMediaObjectToBuffer(mo, ScryptedMimeTypes.RTCAVOffer);
+    }
+  }
+
+
   mediaPlayerPromise: Promise<any>;
   mediaPlayerStatus: any;
   joinPlayer() {
@@ -206,7 +287,7 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
             if (!applications || !applications.length) {
               this.mediaPlayerStatus = undefined;
               this.updateState();
-              reject(CastDevice.CastInactive);
+              reject(new Error('Media player is inactive.'));
               return;
             }
             client.join(applications[0], DefaultMediaReceiver, (err, player) => {
@@ -280,7 +361,7 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
   stateTimestamp: number;
   updateState() {
     this.stateTimestamp = Date.now();
-    const mediaPlayerStatus = this.getMediaStatus();
+    const mediaPlayerStatus = this.getMediaStatusInternal();
     switch (mediaPlayerStatus.mediaPlayerState) {
       case MediaPlayerState.Idle:
         this.running = false;
@@ -295,7 +376,10 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
     this.paused = mediaPlayerStatus.mediaPlayerState === MediaPlayerState.Paused;
     deviceManager.onDeviceEvent(this.nativeId, ScryptedInterface.MediaPlayer, mediaPlayerStatus);
   }
-  getMediaStatus(): MediaStatus {
+  async getMediaStatus() {
+    return this.getMediaStatusInternal();
+  }
+  getMediaStatusInternal(): MediaStatus {
     var mediaPlayerState: MediaPlayerState = this.parseState();
     const media = this.mediaPlayerStatus && this.mediaPlayerStatus.media;
     const metadata = media && media.metadata;
@@ -320,7 +404,13 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
   }
   async stop() {
     const player = await this.joinPlayer();
-    player.stop();
+    // this would disconnect and leave it in a launched but idle state
+    // player.stop();
+
+    // this returns to the homescreen
+    const client = await this.clientPromise;
+    client.stop(player, () => console.log('stpoped'));
+    this.clientPromise = null;
   }
   async skipNext() {
     const player = await this.joinPlayer();
@@ -347,14 +437,13 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
       return;
     }
 
-    mediaManager.convertMediaObjectToUrl(media, null)
-      .then(result => {
-        this.log.i(`url: ${result}`);
-        this.sendMediaToClient(title, result, mimeType);
-      });
+    this.load(media, {
+      title,
+      mimeType,
+    });
   }
 
-  sendNotification(title, body, media, mimeType) {
+  async sendNotification(title, body, media, mimeType) {
     if (!this.device) {
       this.provider.search.removeAllListeners(this.id);
       this.provider.search.once(this.id, () => this.sendNotificationToHost(title, body, media, mimeType));
@@ -362,12 +451,12 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
       return;
     }
 
-    setImmediate(() => this.sendNotificationToHost(title, body, media, mimeType));
+    process.nextTick(() => this.sendNotificationToHost(title, body, media, mimeType));
   }
   async getRefreshFrequency(): Promise<number> {
     return 60;
   }
-  refresh(refreshInterface: string, userInitiated: boolean): void {
+  async refresh(refreshInterface: string, userInitiated: boolean) {
     this.joinPlayer()
       .catch(() => { });
   }
@@ -393,7 +482,15 @@ class CastDeviceProvider extends ScryptedDeviceBase implements DeviceProvider {
       var name = service.txtRecord.fn;
       var type = (model && model.indexOf('Google Home') != -1 && model.indexOf('Hub') == -1) ? ScryptedDeviceType.Speaker : ScryptedDeviceType.Display;
 
-      var interfaces = ['Notifier', 'MediaPlayer', 'Refresh', 'StartStop', 'Pause',];
+      var interfaces = [
+        ScryptedInterface.Notifier,
+        ScryptedInterface.MediaPlayer,
+        ScryptedInterface.Refresh,
+        ScryptedInterface.StartStop,
+        ScryptedInterface.Pause,
+        ScryptedInterface.EngineIOHandler,
+        ScryptedInterface.HttpRequestHandler,
+      ];
 
       var device: Device = {
         nativeId: id,
@@ -429,7 +526,7 @@ class CastDeviceProvider extends ScryptedDeviceBase implements DeviceProvider {
     return this.devices[nativeId] || (this.devices[nativeId] = new CastDevice(this, nativeId));
   }
 
-  discoverDevices(duration: number) {
+  async discoverDevices(duration: number) {
     if (this.searching) {
       return;
     }
