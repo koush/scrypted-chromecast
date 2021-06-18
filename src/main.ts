@@ -1,11 +1,9 @@
 'use strict';
 
 import util from 'util';
-import sdk, { Device, DeviceProvider, EngineIOHandler, HttpRequest, MediaObject, MediaPlayer, MediaPlayerOptions, MediaPlayerState, MediaStatus, Notifier, Refresh, ScryptedDeviceBase, ScryptedDeviceType, ScryptedInterface, ScryptedMimeTypes } from '@scrypted/sdk';
+import sdk, { Device, DeviceProvider, EngineIOHandler, HttpRequest, MediaObject, MediaPlayer, MediaPlayerOptions, MediaPlayerState, MediaStatus, Refresh, ScryptedDeviceBase, ScryptedDeviceType, ScryptedInterface, ScryptedMimeTypes } from '@scrypted/sdk';
 import { EventEmitter } from 'events';
-import memoizeOne from 'memoize-one';
 import mdns from 'mdns';
-import process from 'process';
 import mime from 'mime';
 
 const { mediaManager, systemManager, endpointManager, deviceManager, log } = sdk;
@@ -17,16 +15,6 @@ function ScryptedMediaReceiver() {
 }
 ScryptedMediaReceiver.APP_ID = '00F7C5DD';
 util.inherits(ScryptedMediaReceiver, DefaultMediaReceiver);
-
-const audioFetch = (body) => {
-  var buf = Buffer.from(body);
-  var mo = mediaManager.createMediaObject(buf, 'text/plain');
-  return mediaManager.convertMediaObjectToInsecureLocalUrl(mo, 'audio/*');
-}
-// memoize this text conversion, as announcements going to multiple speakers will
-// trigger multiple text to speech conversions.
-// this is a simple way to prevent thrashing by waiting for the single promise.
-var memoizeAudioFetch = memoizeOne(audioFetch);
 
 // castv2 makes the the assumption that protobufjs returns Buffers, which is does not. It returns ArrayBuffers
 // in the quickjs environment.
@@ -46,7 +34,7 @@ Buffer.concat = function (bufs) {
   return BufferConcat(copy);
 }
 
-class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Refresh, EngineIOHandler {
+class CastDevice extends ScryptedDeviceBase implements MediaPlayer, Refresh, EngineIOHandler {
   provider: CastDeviceProvider;
   host: any;
   device: Device;
@@ -421,38 +409,6 @@ class CastDevice extends ScryptedDeviceBase implements Notifier, MediaPlayer, Re
     player.media.sessionRequest({ type: 'QUEUE_PREV' });
   }
 
-  sendNotificationToHost(title, body, media, mimeType) {
-    if (!media || this.type == 'Speaker') {
-      log.i('fetching audio: ' + body);
-      memoizeAudioFetch(body)
-        .then(result => {
-          this.log.i(`sending audio ${result}`);
-          this.sendMediaToClient(title, result, 'audio/*');
-        })
-        .catch(e => {
-          this.log.e(`error memoizing audio ${e}`);
-          // do not cache errors.
-          memoizeAudioFetch = memoizeOne(audioFetch);
-        });
-      return;
-    }
-
-    this.load(media, {
-      title,
-      mimeType,
-    });
-  }
-
-  async sendNotification(title, body, media, mimeType) {
-    if (!this.device) {
-      this.provider.search.removeAllListeners(this.id);
-      this.provider.search.once(this.id, () => this.sendNotificationToHost(title, body, media, mimeType));
-      this.provider.discoverDevices(30000);
-      return;
-    }
-
-    process.nextTick(() => this.sendNotificationToHost(title, body, media, mimeType));
-  }
   async getRefreshFrequency(): Promise<number> {
     return 60;
   }
@@ -483,7 +439,6 @@ class CastDeviceProvider extends ScryptedDeviceBase implements DeviceProvider {
       var type = (model && model.indexOf('Google Home') != -1 && model.indexOf('Hub') == -1) ? ScryptedDeviceType.Speaker : ScryptedDeviceType.Display;
 
       var interfaces = [
-        ScryptedInterface.Notifier,
         ScryptedInterface.MediaPlayer,
         ScryptedInterface.Refresh,
         ScryptedInterface.StartStop,
